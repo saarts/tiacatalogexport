@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -233,6 +234,39 @@ namespace HardwareCatalogExporter.WinForms
             var stopwatch = Stopwatch.StartNew();
             string search = apiSearch.Text;
             string phase = "Starting catalog extraction";
+            var pendingRows = new ConcurrentQueue<CatalogItem>();
+            var partial = new CatalogResult();
+
+            void PublishRows(int limit)
+            {
+                int added = 0;
+                while (added < limit && pendingRows.TryDequeue(out var item))
+                {
+                    partial.Items.Add(item);
+                    added++;
+                }
+
+                if (added == 0) return;
+                duration = stopwatch.Elapsed.TotalSeconds.ToString("0.00") + " s";
+                SetResult(partial);
+            }
+
+            void KeepPartial(string reason)
+            {
+                PublishRows(int.MaxValue);
+                if (partial.Items.Count == 0)
+                {
+                    Log(reason);
+                    return;
+                }
+
+                string warning = $"{reason} The partial catalog contains {partial.Items.Count:N0} rows.";
+                partial.Warnings.Add(warning);
+                partial.Warnings.AddRange(CatalogVersion.Warnings(partial.Items));
+                duration = stopwatch.Elapsed.TotalSeconds.ToString("0.00") + " s (partial)";
+                SetResult(partial);
+                Log("Warning · " + warning);
+            }
             progress.Style = ProgressBarStyle.Marquee;
             Log(string.IsNullOrEmpty(search) ? "Extracting catalog with a blank API search."
                 : "Extracting catalog with API search “" + search + "”.");
@@ -252,13 +286,17 @@ namespace HardwareCatalogExporter.WinForms
                     phase = value;
                     ShowPhase();
                 });
-                timer.Tick += (sender, args) => ShowPhase();
+                timer.Tick += (sender, args) =>
+                {
+                    PublishRows(2048);
+                    ShowPhase();
+                };
                 ShowPhase();
                 timer.Start();
                 try
                 {
                     var extracted = await worker.Run(session => session.Extract(search,
-                        reporter.Report, cancellation.Token));
+                        reporter.Report, cancellation.Token, pendingRows.Enqueue));
                     cancellation.Token.ThrowIfCancellationRequested();
                     duration = stopwatch.Elapsed.TotalSeconds.ToString("0.00") + " s";
                     SetResult(extracted);
@@ -267,7 +305,12 @@ namespace HardwareCatalogExporter.WinForms
                 }
                 catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
                 {
-                    Log("Extraction cancelled.");
+                    KeepPartial("Extraction cancelled.");
+                }
+                catch
+                {
+                    KeepPartial("Extraction failed.");
+                    throw;
                 }
                 finally
                 {

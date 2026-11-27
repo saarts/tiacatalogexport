@@ -206,16 +206,16 @@ namespace HardwareCatalogExporter.Openness
         }
 
         public CatalogResult Extract(string search = "", Action<string> report = null,
-            CancellationToken cancellation = default)
+            CancellationToken cancellation = default, Action<CatalogItem> onRow = null)
         {
             if (portal == null) throw new InvalidOperationException("Connect to TIA Portal first.");
             cancellation.ThrowIfCancellationRequested();
             report?.Invoke("Opening the TIA Portal hardware catalog");
-            return ReadCatalog(ReadRequired(portal, "HardwareCatalog"), search, report, cancellation);
+            return ReadCatalog(ReadRequired(portal, "HardwareCatalog"), search, report, cancellation, onRow);
         }
 
         internal static CatalogResult ReadCatalog(object catalog, string search, Action<string> report = null,
-            CancellationToken cancellation = default)
+            CancellationToken cancellation = default, Action<CatalogItem> onRow = null)
         {
             var find = catalog.GetType().GetMethod("Find", new[] { typeof(string) })
                 ?? throw new MissingMethodException(catalog.GetType().FullName, "Find(string)");
@@ -282,6 +282,7 @@ namespace HardwareCatalogExporter.Openness
                 }
                 CatalogClassifier.Classify(item);
                 result.Items.Add(item);
+                onRow?.Invoke(item);
                 if (result.Items.Count % 100 == 0)
                     report?.Invoke($"Reading catalog rows ({result.Items.Count:N0} read)");
                 cancellation.ThrowIfCancellationRequested();

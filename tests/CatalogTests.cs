@@ -15,6 +15,25 @@ namespace HardwareCatalogExporter.Tests
     public sealed class CatalogTests
     {
         [Fact]
+        public void CatalogReadPublishesCompletedRowsBeforeCancellation()
+        {
+            var received = new List<CatalogItem>();
+            using (var cancellation = new CancellationTokenSource())
+            {
+                Assert.Throws<OperationCanceledException>(() => PortalSession.ReadCatalog(new FakeCatalog(), "",
+                    cancellation: cancellation.Token, onRow: row =>
+                    {
+                        received.Add(row);
+                        cancellation.Cancel();
+                    }));
+            }
+
+            var first = Assert.Single(received);
+            Assert.Equal("OrderNumber:AbX/V2.9 ", first.TypeIdentifier);
+            Assert.Equal("s7-1200-g2", first.ProductFamily);
+        }
+
+        [Fact]
         public void CatalogReadReportsSearchAndRowsAndHonorsCancellation()
         {
             var phases = new List<string>();
