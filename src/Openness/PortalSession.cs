@@ -40,7 +40,9 @@ namespace HardwareCatalogExporter.Openness
         private object portal;
         private string apiDirectory;
 
-        public string Connection { get; private set; } = "Disconnected";
+        private string connectionPrefix;
+
+        public string Connection => Connected ? connectionPrefix + " · " + ReadProjectStatus(portal) : "Disconnected";
         public bool Connected => portal != null;
 
         private Type Load()
@@ -83,7 +85,7 @@ namespace HardwareCatalogExporter.Openness
         }
 
         public IReadOnlyList<PortalProcess> Processes() => ProcessHandles().Select(process =>
-            new PortalProcess(ProcessId(process), AsText(Read(process, "ProjectPath")), AsText(Read(process, "Mode"))))
+            new PortalProcess(ProcessId(process), ProjectPath(Read(process, "ProjectPath")), AsText(Read(process, "Mode"))))
             .ToList();
 
         private IEnumerable<object> ProcessHandles()
@@ -102,11 +104,10 @@ namespace HardwareCatalogExporter.Openness
             EnsureDisconnected();
             var process = ProcessHandles().FirstOrDefault(candidate => ProcessId(candidate) == id)
                 ?? throw new InvalidOperationException("The selected TIA Portal process is no longer available.");
-            string projectPath = AsText(Read(process, "ProjectPath"));
             var attach = process.GetType().GetMethod("Attach", Type.EmptyTypes)
                 ?? throw new MissingMethodException(process.GetType().FullName, "Attach()");
             portal = Invoke(() => attach.Invoke(process, null));
-            FinishConnection("Attached", id, projectPath);
+            FinishConnection("Attached", id);
         }
 
         public void Start(bool headless)
@@ -124,7 +125,7 @@ namespace HardwareCatalogExporter.Openness
                     ?? throw new MissingMethodException(type.FullName, "GetCurrentProcess()");
                 var process = Invoke(() => processMethod.Invoke(portal, null));
                 FinishConnection(headless ? "Started headless" : "Started with interface",
-                    ProcessId(process), AsText(Read(process, "ProjectPath")));
+                    ProcessId(process));
             }
             catch
             {
@@ -133,15 +134,40 @@ namespace HardwareCatalogExporter.Openness
             }
         }
 
-        private void FinishConnection(string kind, int pid, string projectPath)
+        private void FinishConnection(string kind, int pid)
         {
             if (!(portal is IDisposable))
             {
                 portal = null;
                 throw new InvalidOperationException("The API did not return a disposable TIA Portal session.");
             }
-            Connection = "TIA Portal V20 · " + kind + " · PID " + pid + " · " +
-                (string.IsNullOrEmpty(projectPath) ? "No project reported" : Path.GetFileNameWithoutExtension(projectPath));
+            connectionPrefix = "TIA Portal V20 · " + kind + " · PID " + pid;
+        }
+
+        private static string ProjectPath(object value) =>
+            value is FileSystemInfo path ? path.FullName : value as string;
+
+        internal static string ReadProjectStatus(object connectedPortal)
+        {
+            try
+            {
+                if (!(Read(connectedPortal, "Projects") is IEnumerable projects))
+                    return "Project information unavailable";
+
+                var labels = new List<string>();
+                foreach (object project in projects)
+                {
+                    string name = Read(project, "Name") as string;
+                    if (string.IsNullOrWhiteSpace(name))
+                        name = Path.GetFileNameWithoutExtension(ProjectPath(Read(project, "Path")));
+                    labels.Add(string.IsNullOrWhiteSpace(name) ? "Unnamed project" : name);
+                }
+                return labels.Count == 0 ? "No project open" : string.Join(", ", labels);
+            }
+            catch (Exception exception)
+            {
+                return "Project information unavailable (" + exception.GetType().Name + ")";
+            }
         }
 
         private void EnsureDisconnected()
@@ -291,7 +317,7 @@ namespace HardwareCatalogExporter.Openness
         {
             var connected = portal;
             portal = null;
-            Connection = "Disconnected";
+            connectionPrefix = null;
             (connected as IDisposable)?.Dispose();
         }
 

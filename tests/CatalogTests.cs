@@ -14,6 +14,29 @@ namespace HardwareCatalogExporter.Tests
     public sealed class CatalogTests
     {
         [Fact]
+        public void ProjectStatusReadsCurrentNamesFromConnectedSession()
+        {
+            var session = new FakePortal();
+            Assert.Equal("No project open", PortalSession.ReadProjectStatus(session));
+
+            session.Projects.Add(new FakeProject { Name = "Production Line" });
+            session.Projects.Add(new FakeProject { Path = new FileInfo("TestBench.ap20") });
+            Assert.Equal("Production Line, TestBench", PortalSession.ReadProjectStatus(session));
+            Assert.Equal("Project information unavailable", PortalSession.ReadProjectStatus(new object()));
+        }
+
+        private sealed class FakePortal
+        {
+            public List<FakeProject> Projects { get; } = new List<FakeProject>();
+        }
+
+        private sealed class FakeProject
+        {
+            public string Name { get; set; }
+            public FileInfo Path { get; set; }
+        }
+
+        [Fact]
         public void CatalogQueryPreservesEveryRowAndUsesOnlyReturnedIdentifiers()
         {
             var api = new FakeCatalog();

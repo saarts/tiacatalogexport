@@ -191,7 +191,9 @@ namespace HardwareCatalogExporter.WinForms
         private Task RefreshProcesses() => Work(async () =>
         {
             int? selected = (processes.SelectedItem as PortalProcess)?.Id;
-            var list = await worker.Run(session => session.Processes());
+            var state = await worker.Run(session => (Processes: session.Processes(), Connection: session.Connection));
+            var list = state.Processes;
+            connection.Text = state.Connection;
             processes.Items.Clear();
             foreach (var process in list) processes.Items.Add(process);
             if (list.Count > 0)
@@ -223,7 +225,9 @@ namespace HardwareCatalogExporter.WinForms
             try
             {
                 string search = apiSearch.Text;
-                var extracted = await worker.Run(session => session.Extract(search));
+                var state = await worker.Run(session => (Catalog: session.Extract(search), Connection: session.Connection));
+                var extracted = state.Catalog;
+                connection.Text = state.Connection;
                 duration = stopwatch.Elapsed.TotalSeconds.ToString("0.00") + " s";
                 SetResult(extracted);
                 foreach (string warning in extracted.Warnings) Log("Warning · " + warning);
