@@ -124,7 +124,8 @@ Exit codes are 0 for success, 1 for partial output and 2 for failure.";
                 bool verbose = options.ContainsKey("--verbose");
                 if (verbose) Console.Error.WriteLine(session.Connection);
                 var stopwatch = Stopwatch.StartNew();
-                var result = session.Extract(Get(options, "--search") ?? "");
+                var result = session.Extract(Get(options, "--search") ?? "",
+                    verbose ? (Action<string>)Console.Error.WriteLine : null);
                 stopwatch.Stop();
                 var items = result.Items.Where(filter.Matches).ToList();
                 if (options.ContainsKey("--latest")) items = CatalogVersion.Latest(items);

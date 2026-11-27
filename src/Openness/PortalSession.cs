@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
 using HardwareCatalogExporter.Core;
 
 namespace HardwareCatalogExporter.Openness
@@ -204,13 +205,17 @@ namespace HardwareCatalogExporter.Openness
             return string.Join(Environment.NewLine, lines);
         }
 
-        public CatalogResult Extract(string search = "")
+        public CatalogResult Extract(string search = "", Action<string> report = null,
+            CancellationToken cancellation = default)
         {
             if (portal == null) throw new InvalidOperationException("Connect to TIA Portal first.");
-            return ReadCatalog(ReadRequired(portal, "HardwareCatalog"), search);
+            cancellation.ThrowIfCancellationRequested();
+            report?.Invoke("Opening the TIA Portal hardware catalog");
+            return ReadCatalog(ReadRequired(portal, "HardwareCatalog"), search, report, cancellation);
         }
 
-        internal static CatalogResult ReadCatalog(object catalog, string search)
+        internal static CatalogResult ReadCatalog(object catalog, string search, Action<string> report = null,
+            CancellationToken cancellation = default)
         {
             var find = catalog.GetType().GetMethod("Find", new[] { typeof(string) })
                 ?? throw new MissingMethodException(catalog.GetType().FullName, "Find(string)");
@@ -235,8 +240,14 @@ namespace HardwareCatalogExporter.Openness
                 ["FirmwareVersion"] = (item, value) => item.FirmwareVersion = value
             };
             var propertiesByType = new Dictionary<Type, PropertyInfo[]>();
-            foreach (var raw in Rows(Invoke(() => find.Invoke(catalog, new object[] { search }))))
+            cancellation.ThrowIfCancellationRequested();
+            report?.Invoke("Waiting for TIA Portal catalog search");
+            var rows = Rows(Invoke(() => find.Invoke(catalog, new object[] { search })));
+            cancellation.ThrowIfCancellationRequested();
+            report?.Invoke("Reading catalog rows (0 read)");
+            foreach (var raw in rows)
             {
+                cancellation.ThrowIfCancellationRequested();
                 var item = new CatalogItem();
                 var type = raw.GetType();
                 if (!propertiesByType.TryGetValue(type, out var properties))
@@ -249,6 +260,7 @@ namespace HardwareCatalogExporter.Openness
 
                 foreach (var property in properties)
                 {
+                    cancellation.ThrowIfCancellationRequested();
                     object value;
                     try { value = property.GetValue(raw); }
                     catch (TargetInvocationException exception)
@@ -270,8 +282,13 @@ namespace HardwareCatalogExporter.Openness
                 }
                 CatalogClassifier.Classify(item);
                 result.Items.Add(item);
+                if (result.Items.Count % 100 == 0)
+                    report?.Invoke($"Reading catalog rows ({result.Items.Count:N0} read)");
+                cancellation.ThrowIfCancellationRequested();
             }
 
+            cancellation.ThrowIfCancellationRequested();
+            report?.Invoke($"Preparing {result.Items.Count:N0} rows for display or export");
             if (result.Items.Count == 0) result.Warnings.Add("The catalog query returned zero rows.");
             result.Warnings.AddRange(warnings.OrderBy(value => value, StringComparer.Ordinal));
             result.Warnings.AddRange(CatalogVersion.Warnings(result.Items));

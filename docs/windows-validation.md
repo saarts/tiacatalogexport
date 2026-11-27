@@ -11,3 +11,9 @@ Consult the official V20 Openness manual for the catalog search and connection c
 5. Check whether any reported `Find` overload explicitly documents CPU compatibility semantics. A two-string signature alone is insufficient. Verify it with two versions of the same CPU and known compatible and incompatible entries. Keep catalog relationships separate from configurability in a specific slot, electrical restrictions and module counts. The exporter currently emits no compatibility database.
 
 When testing an unauthorized application, use the Siemens authorization UI in the same Windows session. The exporter leaves process authorization and group membership under Siemens and Windows control.
+
+## Diagnose a slow catalog extraction
+
+The GUI displays the current extraction stage, elapsed time and row count during enumeration. The CLI reports the same stages with `--verbose`. Visual Studio messages about `FunctionFromSTA` threads exiting with code 0 are debugger output. Use the exporter's stage and error messages to locate the delay.
+
+Try a narrow API search, such as a known article number. If the stage stays at **Waiting for TIA Portal catalog search**, the Siemens `Find(string)` call has yet to return. If it shows **Reading catalog rows**, the exporter is enumerating results and reading item properties. **Cancel extraction** takes effect when the current Siemens call returns. It leaves the previously loaded grid intact.

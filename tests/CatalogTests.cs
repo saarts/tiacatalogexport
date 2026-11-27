@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using HardwareCatalogExporter.Core;
 using HardwareCatalogExporter.Export;
 using HardwareCatalogExporter.Openness;
@@ -13,6 +14,28 @@ namespace HardwareCatalogExporter.Tests
 {
     public sealed class CatalogTests
     {
+        [Fact]
+        public void CatalogReadReportsSearchAndRowsAndHonorsCancellation()
+        {
+            var phases = new List<string>();
+            var api = new FakeCatalog();
+            PortalSession.ReadCatalog(api, "CPU", phases.Add);
+            Assert.Equal("CPU", api.LastQuery);
+            Assert.Collection(phases,
+                phase => Assert.Contains("catalog search", phase),
+                phase => Assert.Contains("0 read", phase),
+                phase => Assert.Contains("2 rows", phase));
+
+            using (var cancellation = new CancellationTokenSource())
+            {
+                Assert.Throws<OperationCanceledException>(() => PortalSession.ReadCatalog(api, "",
+                    phase =>
+                    {
+                        if (phase.Contains("0 read")) cancellation.Cancel();
+                    }, cancellation.Token));
+            }
+        }
+
         [Fact]
         public void ProjectStatusReadsCurrentNamesFromConnectedSession()
         {

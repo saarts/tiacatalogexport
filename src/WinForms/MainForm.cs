@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Linq;
 using System.Threading.Tasks;
+using CancellationTokenSource = System.Threading.CancellationTokenSource;
 using System.Windows.Forms;
 using HardwareCatalogExporter.Core;
 using HardwareCatalogExporter.Export;
@@ -21,6 +22,9 @@ namespace HardwareCatalogExporter.WinForms
         private readonly CheckBox latest = new CheckBox { Text = "Latest catalog version", AutoSize = true };
         private readonly TextBox apiSearch = new TextBox { Width = 140, AccessibleName = "API search" };
         private readonly Label connection = new Label { Text = "Disconnected", AutoSize = true, MaximumSize = new Size(460, 0) };
+        private readonly Label extractionStatus = new Label { AutoSize = true };
+        private readonly Button cancelExtraction = new Button { Text = "Cancel extraction", AutoSize = true, Enabled = false };
+        private CancellationTokenSource extractionCancellation;
         private readonly Label status = new Label { AutoSize = true };
         private readonly ProgressBar progress = new ProgressBar { Width = 120 };
         private readonly TextBox messages = new TextBox { ReadOnly = true, Multiline = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill };
@@ -78,9 +82,15 @@ namespace HardwareCatalogExporter.WinForms
                 }
             }));
             extract = ActionButton("Extract catalog", async () => await Extract());
+            cancelExtraction.Click += (sender, args) =>
+            {
+                extractionCancellation?.Cancel();
+                cancelExtraction.Enabled = false;
+                Log("Cancellation requested. Waiting for the current Siemens API call to return.");
+            };
 
             layout.Controls.Add(Flow(Caption("TIA Portal process"), processes, refresh, attach, startGui, startHeadless, disconnect), 0, 0);
-            layout.Controls.Add(Flow(connection, Caption("API search"), apiSearch, extract), 0, 1);
+            layout.Controls.Add(Flow(connection, Caption("API search"), apiSearch, extract, cancelExtraction), 0, 1);
             layout.Controls.Add(Flow(FilterBox("Order number", value => filter.Article = value),
                 FilterBox("Device name", value => filter.Name = value),
                 FilterBox("TypeIdentifier", value => filter.Identifier = value),
@@ -130,7 +140,7 @@ namespace HardwareCatalogExporter.WinForms
             var compatibility = new Button { Text = "CPU-compatible modules", AutoSize = true };
             compatibility.Click += (sender, args) => Log(PortalSession.CompatibilityStatus);
             layout.Controls.Add(Flow(copy, Caption("Export scope"), scope, format, delimiter, latest, export, compatibility), 0, 5);
-            layout.Controls.Add(Flow(status, progress), 0, 6);
+            layout.Controls.Add(Flow(status, progress, extractionStatus), 0, 6);
             layout.Controls.Add(messages, 0, 7);
 
             format.SelectedIndexChanged += (sender, args) => UpdateButtons();
@@ -221,18 +231,53 @@ namespace HardwareCatalogExporter.WinForms
         private Task Extract() => Work(async () =>
         {
             var stopwatch = Stopwatch.StartNew();
+            string search = apiSearch.Text;
+            string phase = "Starting catalog extraction";
             progress.Style = ProgressBarStyle.Marquee;
-            try
+            Log(string.IsNullOrEmpty(search) ? "Extracting catalog with a blank API search."
+                : "Extracting catalog with API search “" + search + "”.");
+            using (var cancellation = new CancellationTokenSource())
+            using (var timer = new Timer { Interval = 500 })
             {
-                string search = apiSearch.Text;
-                var state = await worker.Run(session => (Catalog: session.Extract(search), Connection: session.Connection));
-                var extracted = state.Catalog;
-                connection.Text = state.Connection;
-                duration = stopwatch.Elapsed.TotalSeconds.ToString("0.00") + " s";
-                SetResult(extracted);
-                foreach (string warning in extracted.Warnings) Log("Warning · " + warning);
+                extractionCancellation = cancellation;
+                cancelExtraction.Enabled = true;
+                void ShowPhase()
+                {
+                    string prefix = cancellation.IsCancellationRequested ? "Cancelling · " : "";
+                    extractionStatus.Text = $"{prefix}{phase} · {stopwatch.Elapsed:hh\\:mm\\:ss}";
+                }
+                IProgress<string> reporter = new Progress<string>(value =>
+                {
+                    if (extractionCancellation != cancellation) return;
+                    phase = value;
+                    ShowPhase();
+                });
+                timer.Tick += (sender, args) => ShowPhase();
+                ShowPhase();
+                timer.Start();
+                try
+                {
+                    var extracted = await worker.Run(session => session.Extract(search,
+                        reporter.Report, cancellation.Token));
+                    cancellation.Token.ThrowIfCancellationRequested();
+                    duration = stopwatch.Elapsed.TotalSeconds.ToString("0.00") + " s";
+                    SetResult(extracted);
+                    Log($"Extraction finished · {extracted.Items.Count:N0} rows in {duration}");
+                    foreach (string warning in extracted.Warnings) Log("Warning · " + warning);
+                }
+                catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+                {
+                    Log("Extraction cancelled.");
+                }
+                finally
+                {
+                    extractionCancellation = null;
+                    cancelExtraction.Enabled = false;
+                    extractionStatus.Text = "";
+                    progress.Style = ProgressBarStyle.Blocks;
+                    progress.Value = 0;
+                }
             }
-            finally { progress.Style = ProgressBarStyle.Blocks; progress.Value = 0; }
         });
 
         private IEnumerable<CatalogItem> Selected() => grid.SelectedRows.Cast<DataGridViewRow>()
